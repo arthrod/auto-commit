@@ -270,7 +270,7 @@ async fn main() -> Result<(), ()> {
     // Using the new field to avoid deprecation warning:
     let commit_args = &completion.choices[0]
         .message
-        .function_call_object
+        .function_call
         .as_ref()
         .unwrap()
         .arguments;
