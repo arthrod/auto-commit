@@ -130,7 +130,8 @@ async fn main() -> Result<(), ()> {
     let diff_output = str::from_utf8(&diff_output).unwrap();
 
     let combined = format!("Changed files:\n{}\n\nDiff:\n{}", files_changed, diff_output);
-    let output = truncate_to_n_tokens(&combined, 20_000);
+    const MAX_DIFF_TOKENS: usize = 20_000; // Or define elsewhere
+    let output = truncate_to_n_tokens(&combined, MAX_DIFF_TOKENS);
 
     if !cli.dry_run {
         info!("Loading Data...");
