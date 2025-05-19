@@ -110,7 +110,16 @@ async fn main() -> Result<(), ()> {
         })?
         .stdout;
 
-    if str::from_utf8(&is_repo).unwrap_or("").trim() != "true" {
+    if match str::from_utf8(&is_repo) {
+        Ok(v) => v.trim() != "true",
+        Err(e) => {
+            error!("Git repository check output was not valid UTF-8: {}", e);
+            true // Treat as not a repo if output is invalid
+        }
+    } {
+        error!("It looks like you are not in a git repository.\nPlease run this command from the root of a git repository, or initialize one using `git init`.");
+        std::process::exit(1);
+    }
         error!("It looks like you are not in a git repository.\nPlease run this command from the root of a git repository, or initialize one using `git init`.");
         std::process::exit(1);
     }
