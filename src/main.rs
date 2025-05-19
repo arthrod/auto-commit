@@ -106,7 +106,7 @@ async fn main() -> Result<(), ()> {
     let files_output = Command::new("git")
         .arg("diff")
         .arg("--name-only")
-        .arg("HEAD")
+        .arg("--staged")
         .output()
         .expect("Couldn't get changed files.")
         .stdout;
