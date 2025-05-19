@@ -1,16 +1,24 @@
 use async_openai::{
     config::OpenAIConfig,
     types::{
-        ChatCompletionMessageToolCall, ChatCompletionFunctions, ChatCompletionRequestMessage,
-        CreateChatCompletionRequestArgs, FunctionCall, ChatCompletionToolType, ChatCompletionNamedToolChoice,
-        ChatCompletionToolChoiceOption, Role, FunctionName,
+        ChatCompletionRequestSystemMessageArgs,      // system message builder
+        ChatCompletionRequestAssistantMessageArgs,   // assistant message builder
+        ChatCompletionRequestToolMessageArgs,        // tool response builder
+        ChatCompletionMessageToolCall,               // tool-call struct
+        ChatCompletionFunctionsArgs,                 // function (tool) declaration
+        CreateChatCompletionRequestArgs,             // request builder
+        FunctionCall, FunctionName,                  // function-call types
+        ChatCompletionToolType,                      // tool types
+        ChatCompletionNamedToolChoice,               // tool-choice struct
+        ChatCompletionToolChoiceOption,              // tool-choice enum
+        Role,                                        // message roles
     },
 };
 use clap::Parser;
 use clap_verbosity_flag::{InfoLevel, Verbosity};
 use log::{error, info};
 use question::{Answer, Question};
-use rand::seq::SliceRandom;
+use rand::seq::SliceRandom;  // for .choose()
 use schemars::{
     gen::{SchemaGenerator, SchemaSettings},
     JsonSchema,
@@ -24,11 +32,12 @@ use std::{
 };
 use auto_commit::{get_model_from_env, truncate_to_n_tokens};
 
+// CLI definition
 #[derive(Parser)]
 #[command(version)]
 #[command(name = "Auto Commit")]
 #[command(author = "Miguel Piedrafita <soy@miguelpiedrafita.com>")]
-#[command(about = "Automagically generate commit messages.", long_about = None)]
+#[command(about = "Automagically generate commit messages.")]
 struct Cli {
     #[clap(flatten)]
     verbose: Verbosity<InfoLevel>,
@@ -40,11 +49,10 @@ struct Cli {
     force: bool,
 }
 
+// Commit schema
 #[derive(Debug, serde::Deserialize, JsonSchema)]
 struct Commit {
-    /// The title of the commit.
     title: String,
-    /// An exhaustive description of the changes.
     description: String,
 }
 
@@ -58,11 +66,13 @@ const MAX_DIFF_TOKENS: usize = 20_000;
 
 #[tokio::main]
 async fn main() -> Result<(), ()> {
+    // Parse CLI and init logging
     let cli = Cli::parse();
     env_logger::Builder::new()
         .filter_level(cli.verbose.log_level_filter())
         .init();
 
+    // Ensure API key
     let api_token = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| {
         error!("Please set the OPENAI_API_KEY environment variable.");
         std::process::exit(1);
@@ -70,238 +80,164 @@ async fn main() -> Result<(), ()> {
 
     // Gather staged diff
     let git_staged_cmd = Command::new("git")
-        .arg("diff")
-        .arg("--staged")
-        .output()
-        .map_err(|e| {
-            error!("Failed to get staged diff: {}", e);
-            ()
-        })?
+        .args(["diff", "--staged"])
+        .output().map_err(|e| { error!("Failed to get staged diff: {}", e); () })?
         .stdout;
-    let git_staged_cmd = match str::from_utf8(&git_staged_cmd) {
-        Ok(v) => v,
-        Err(e) => {
-            error!("Staged diff output was not valid UTF-8: {}", e);
-            ""
-        }
-    };
-    if git_staged_cmd.is_empty() {
-        error!("There are no staged files to commit. Try running `git add` to stage some files.");
+    let git_staged = std::str::from_utf8(&git_staged_cmd).unwrap_or("");
+    if git_staged.is_empty() {
+        error!("No staged files – try `git add`.");
     }
 
     // Verify Git repo
     let is_repo = Command::new("git")
-        .arg("rev-parse")
-        .arg("--is-inside-work-tree")
-        .output()
-        .map_err(|e| {
-            error!("Failed to check if this is a git repository: {}", e);
-            ()
-        })?
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output().map_err(|e| { error!("Failed repo check: {}", e); () })?
         .stdout;
-    if match str::from_utf8(&is_repo) {
-        Ok(v) => v.trim() != "true",
-        Err(e) => {
-            error!("Git repo check output was not valid UTF-8: {}", e);
-            true
-        }
-    } {
-        error!("It looks like you are not in a git repository. Please run this command from the root of a git repository, or `git init`.");
+    if std::str::from_utf8(&is_repo).unwrap_or("") != "true\n" {
+        error!("Not in a git repo; run from the root or `git init`.");
         std::process::exit(1);
     }
 
-    let client = async_openai::Client::with_config(OpenAIConfig::new().with_api_key(api_token));
+    // Build OpenAI client
+    let client = async_openai::Client::with_config(
+        OpenAIConfig::new().with_api_key(api_token),
+    );
 
-    // Prepare combined diff
-    let files_output = Command::new("git")
-        .arg("diff")
-        .arg("--name-only")
-        .arg("--staged")
-        .output()
-        .map_err(|e| { error!("Couldn't get changed files: {}", e); () })?
+    // Prepare diff context
+    let files = Command::new("git")
+        .args(["diff", "--name-only", "--staged"])
+        .output().map_err(|e| { error!("Couldn't get file list: {}", e); () })?
         .stdout;
-    let files_changed = match str::from_utf8(&files_output) {
-        Ok(v) => v,
-        Err(e) => { error!("Changed files output not UTF-8: {}", e); "" }
-    };
-    let diff_output = Command::new("git")
-        .arg("diff")
-        .arg("--staged")
-        .output()
-        .map_err(|e| { error!("Couldn't find diff: {}", e); () })?
-        .stdout;
-    let diff_output = match str::from_utf8(&diff_output) {
-        Ok(v) => v,
-        Err(e) => { error!("Diff output not UTF-8: {}", e); "" }
-    };
-    let combined = format!("Changed files:\n{}\n\nDiff:\n{}", files_changed, diff_output);
-    let output = truncate_to_n_tokens(&combined, MAX_DIFF_TOKENS);
+    let files = std::str::from_utf8(&files).unwrap_or("");
+    let diff = git_staged; // already UTF-8
+    let combined = format!("Changed files:\n{}\n\nDiff:\n{}", files, diff);
+    let context = truncate_to_n_tokens(&combined, MAX_DIFF_TOKENS);
 
-    if !cli.dry_run {
-        info!("Loading Data...");
-    }
+    // Optional spinner when silent
     let spinner = if !cli.dry_run && cli.verbose.is_silent() {
-        let vs = [
-            Spinners::Earth, 
-            Spinners::Aesthetic, 
-            Spinners::Hearts,
-            Spinners::BoxBounce2,
-            Spinners::BouncingBar,
-            Spinners::Christmas,
-            Spinners::Clock,
-            Spinners::FingerDance,
-            Spinners::FistBump,
-            Spinners::Flip,
-            Spinners::Layer,
-            Spinners::Line,
-            Spinners::Material,
-            Spinners::Mindblown,
-            Spinners::Monkey,
-            Spinners::Noise,
-            Spinners::Point,
-            Spinners::Pong,
-            Spinners::Runner,
-            Spinners::SoccerHeader,
-            Spinners::Speaker,
-            Spinners::SquareCorners,
-            Spinners::Triangle,
-            // ... more spinners ...
+        let choices = [
+            Spinners::Earth, Spinners::Aesthetic, Spinners::Hearts,
+            Spinners::BoxBounce, Spinners::BouncingBar,
+            // … add others …
         ];
-        Some(Spinner::new(vs.choose(&mut rand::thread_rng()).unwrap().clone(), "Analyzing Codebase...".into()))
+        Some(Spinner::new(
+            *choices.choose(&mut rand::thread_rng()).unwrap(),
+            "Analyzing code…".into(),
+        ))
     } else {
         None
     };
 
-    // Build JSON schema for Commit
-    let mut generator = SchemaGenerator::new(SchemaSettings::openapi3().with(|s| s.inline_subschemas = true));
-    let commit_schema = generator.subschema_for::<Commit>().into_object();
+    // Generate JSON schema for Commit
+    let mut gen = SchemaGenerator::new(
+        SchemaSettings::openapi3().with(|s| s.inline_subschemas = true),
+    );
+    let commit_schema = gen.subschema_for::<Commit>().into_object();
 
-    // Create chat completion, *forcing* the "commit" tool
-    let completion = client
-        .chat()
-        .create(
-            CreateChatCompletionRequestArgs::default()
-                .model(&get_model_from_env())
-                .temperature(0.0)
-                .max_tokens(2000u16)
-                .messages(vec![
-                    // System prompt
-                    ChatCompletionRequestMessage {
-                        role: Role::System,
-                        content: Some("You are an experienced developer who writes great commit messages.".to_string()),
-                        ..Default::default()
-                    },
-                    // Assistant calls get_diff tool
-                    ChatCompletionRequestMessage {
-                        role: Role::Assistant,
-                        tool_calls: Some(vec![
-                            ChatCompletionMessageToolCall {
-                                id: "call_get_diff".to_string(),
-                                r#type: ChatCompletionToolType::Function,
-                                function: FunctionCall {
-                                    name: "get_diff".to_string(),
-                                    arguments: "{}".to_string(),
-                                },
-                            }
-                        ]),
-                        ..Default::default()
-                    },
-                    // Tool (diff) returns its output
-                    ChatCompletionRequestMessage {
-                        role: Role::Tool,
-                        tool_call_id: Some("call_get_diff".to_string()),
-                        name: Some("get_diff".to_string()),
-                        content: Some(output.clone()),
-                        ..Default::default()
-                    },
-                ])
-                .functions(vec![
-                    ChatCompletionFunctions {
+    // Construct messages
+    let messages = vec![
+        // System prompt
+        ChatCompletionRequestSystemMessageArgs::default()
+            .content("You are an experienced developer who writes great commit messages.".to_string())
+            .build().unwrap()
+            .into(),
+        // Assistant invokes get_diff tool
+        ChatCompletionRequestAssistantMessageArgs::default()
+            .tool_calls(vec![
+                ChatCompletionMessageToolCall {
+                    id: "call_get_diff".to_string(),
+                    r#type: ChatCompletionToolType::Function,
+                    function: FunctionCall {
                         name: "get_diff".to_string(),
-                        description: Some("Returns the output of `git diff HEAD` as a string.".to_string()),
-                        parameters: json!({ "type": "object", "properties": {} }),
+                        arguments: "{}".to_string(),
                     },
-                    ChatCompletionFunctions {
-                        name: "commit".to_string(),
-                        description: Some("Creates a commit with the given title and a description.".to_string()),
-                        parameters: Some(serde_json::to_value(commit_schema).unwrap()),
-                    },
-                ])
-                .tool_choice(
-                    ChatCompletionToolChoiceOption::Named(
-                        ChatCompletionNamedToolChoice {
-                            r#type: Some(ChatCompletionToolType::Function),
-                            function: FunctionName {
-                                name: "commit".to_string(),
-                            },
-                        }
-                    )
-                )
-                .build()
-                .unwrap(),
-        )
-        .await
-        .expect("Couldn't complete prompt.");
+                }
+            ])
+            .build().unwrap()
+            .into(),
+        // Tool returns diff
+        ChatCompletionRequestToolMessageArgs::default()
+            .tool_call_id("call_get_diff".to_string())
+            .name("get_diff".to_string())
+            .content(context.clone())
+            .build().unwrap()
+            .into(),
+    ];
 
+    // Declare tools/functions
+    let functions = vec![
+        ChatCompletionFunctionsArgs::default()
+            .name("get_diff".to_string())
+            .description("Returns the output of `git diff HEAD` as a string.".to_string())
+            .parameters(json!({ "type": "object", "properties": {} }))
+            .build().unwrap(),
+        ChatCompletionFunctionsArgs::default()
+            .name("commit".to_string())
+            .description("Creates a commit with the given title and a description.".to_string())
+            .parameters(serde_json::to_value(commit_schema).unwrap())
+            .build().unwrap(),
+    ];
+
+    // Send request, forcing the "commit" tool
+    let completion = client.chat().create(
+        CreateChatCompletionRequestArgs::default()
+            .model(&get_model_from_env())
+            .messages(messages)
+            .functions(functions)
+            .tool_choice(ChatCompletionToolChoiceOption::Named(
+                ChatCompletionNamedToolChoice {
+                    r#type: Some(ChatCompletionToolType::Function),
+                    function: FunctionName { name: "commit".to_string() },
+                }
+            ))
+            .temperature(0.0)
+            .max_tokens(2000u16)
+            .build().unwrap()
+    ).await.expect("Completion failed");
+
+    // Stop spinner
     if let Some(sp) = spinner {
-        sp.stop_with_message("Finished Analyzing!".into());
+        sp.stop_with_message("Analysis complete.".into());
     }
 
-    // Extract commit args from the tool_calls response
-    let tool_call = completion.choices[0]
+    // Parse commit message from the first tool call in the assistant’s response
+    let tool_call = &completion.choices[0]
         .message
-        .tool_calls
-        .as_ref()
-        .and_then(|calls| calls.first())
-        .expect("No tool calls in assistant response");
-    let commit_args = &tool_call.function.arguments;
-    let commit_msg = serde_json::from_str::<Commit>(commit_args)
-        .expect("Couldn't parse model response.")
+        .tool_calls.as_ref().unwrap()[0];
+    let commit_args_json = &tool_call.function.arguments;
+    let commit_msg = serde_json::from_str::<Commit>(commit_args_json)
+        .expect("Failed to parse commit JSON")
         .to_string();
 
-    // Dry run or real commit
+    // Dry-run or actual commit
     if cli.dry_run {
         info!("{}", commit_msg);
         return Ok(());
-    } else {
-        info!(
-            "Proposed Commit:\n------------------------------\n{}\n------------------------------",
-            commit_msg
-        );
-        if !cli.force {
-            let answer = Question::new("Do you want to continue? (Y/n)")
-                .yes_no()
-                .until_acceptable()
-                .default(Answer::YES)
-                .ask()
-                .expect("Couldn't ask question.");
-            if answer == Answer::NO {
-                error!("Commit aborted by user.");
-                std::process::exit(1);
-            }
-            info!("Committing Message...");
+    }
+    info!("Proposed Commit:\n{}\n", commit_msg);
+    if !cli.force {
+        if Question::new("Commit? (Y/n)")
+            .yes_no().until_acceptable().default(Answer::YES)
+            .ask().unwrap() == Answer::NO
+        {
+            error!("Aborted.");
+            std::process::exit(1);
         }
     }
 
-    // Execute `git commit`
-    let mut ps_commit = Command::new("git")
+    // Perform the git commit
+    let mut proc_commit = Command::new("git")
         .arg("commit")
         .args(if cli.review { vec!["-e"] } else { vec![] })
-        .arg("-F")
-        .arg("-")
+        .arg("-F").arg("-")
         .stdin(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = ps_commit.stdin.take().expect("Failed to open stdin");
+        .spawn().unwrap();
+    let mut stdin = proc_commit.stdin.take().unwrap();
     std::thread::spawn(move || {
-        stdin
-            .write_all(commit_msg.as_bytes())
-            .expect("Failed to write to stdin");
+        stdin.write_all(commit_msg.as_bytes()).unwrap();
     });
-    let commit_output = ps_commit
-        .wait_with_output()
-        .expect("There was an error when creating the commit.");
-    info!("{}", str::from_utf8(&commit_output.stdout).unwrap());
+    let out = proc_commit.wait_with_output().unwrap();
+    info!("{}", str::from_utf8(&out.stdout).unwrap());
 
     Ok(())
 }
