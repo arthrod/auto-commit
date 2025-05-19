@@ -332,14 +332,15 @@ mod tests {
 
     #[test]
     fn get_model_from_env_returns_env_value_when_set() {
-        std::env::set_var("OPENAI_MODEL", "test-model");
+        std::env::set_var("AUTO_COMMIT_MODEL", "test-model");
         let model = get_model_from_env();
         assert_eq!(model, "test-model".to_string());
+        std::env::remove_var("AUTO_COMMIT_MODEL");
     }
 
     #[test]
     fn get_model_from_env_returns_non_empty_default_when_unset() {
-        std::env::remove_var("OPENAI_MODEL");
+        std::env::remove_var("AUTO_COMMIT_MODEL");
         let model = get_model_from_env();
         assert!(!model.is_empty(), "Default model should not be empty");
     }
