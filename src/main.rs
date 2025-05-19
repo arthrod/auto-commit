@@ -120,9 +120,6 @@ async fn main() -> Result<(), ()> {
         error!("It looks like you are not in a git repository.\nPlease run this command from the root of a git repository, or initialize one using `git init`.");
         std::process::exit(1);
     }
-        error!("It looks like you are not in a git repository.\nPlease run this command from the root of a git repository, or initialize one using `git init`.");
-        std::process::exit(1);
-    }
 
     let client = async_openai::Client::with_config(OpenAIConfig::new().with_api_key(api_token));
 
