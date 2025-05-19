@@ -286,3 +286,66 @@ async fn main() -> Result<(), ()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap_verbosity_flag::{InfoLevel, Verbosity};
+    use log::LevelFilter;
+
+    #[test]
+    fn commit_to_string_formats_title_and_description() {
+        let commit = Commit {
+            title: "Fix bug".to_string(),
+            description: "Detailed description".to_string(),
+        };
+        assert_eq!(commit.to_string(), "Fix bug\n\nDetailed description");
+    }
+
+    #[test]
+    fn cli_default_parsing_sets_flags_and_info_level() {
+        let cli = Cli::parse_from(&["auto-commit"]);
+        assert!(!cli.dry_run, "dry_run should be false by default");
+        assert!(!cli.review, "review should be false by default");
+        assert!(!cli.force, "force should be false by default");
+        assert_eq!(cli.verbose.log_level_filter(), LevelFilter::Info);
+    }
+
+    #[test]
+    fn cli_parsing_all_flags_and_verbose_levels() {
+        let args = &["auto-commit", "--dry-run", "--review", "--force", "-vv"];
+        let cli = Cli::parse_from(args);
+        assert!(cli.dry_run, "dry_run should be true when --dry-run is passed");
+        assert!(cli.review, "review should be true when --review is passed");
+        assert!(cli.force, "force should be true when --force is passed");
+        assert_eq!(cli.verbose.log_level_filter(), LevelFilter::Debug);
+    }
+
+    #[test]
+    fn get_model_from_env_returns_env_value_when_set() {
+        std::env::set_var("OPENAI_MODEL", "test-model");
+        let model = get_model_from_env();
+        assert_eq!(model, "test-model".to_string());
+    }
+
+    #[test]
+    fn get_model_from_env_returns_non_empty_default_when_unset() {
+        std::env::remove_var("OPENAI_MODEL");
+        let model = get_model_from_env();
+        assert!(!model.is_empty(), "Default model should not be empty");
+    }
+
+    #[test]
+    fn truncate_to_n_tokens_returns_original_when_under_limit() {
+        let input = "one two three";
+        let result = truncate_to_n_tokens(input, 5);
+        assert_eq!(result, input.to_string());
+    }
+
+    #[test]
+    fn truncate_to_n_tokens_truncates_to_specified_token_count() {
+        let input = (1..=10).map(|n| n.to_string()).collect::<Vec<_>>().join(" ");
+        let result = truncate_to_n_tokens(&input, 5);
+        assert_eq!(result.split_whitespace().count(), 5);
+    }
+}
