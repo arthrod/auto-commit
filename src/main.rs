@@ -1,8 +1,8 @@
 use async_openai::{
     config::OpenAIConfig,
     types::{
-        ChatCompletionFunctionCall, ChatCompletionFunctions, ChatCompletionRequestMessage,
-        CreateChatCompletionRequestArgs, FunctionCall, Role,
+        ChatCompletionMessageToolCall, ChatCompletionFunctions, ChatCompletionRequestMessage,
+        CreateChatCompletionRequestArgs, ToolCall, Role,
     },
 };
 use clap::Parser;
@@ -53,7 +53,6 @@ struct Cli {
 struct Commit {
     /// The title of the commit.
     title: String,
-
     /// An exhaustive description of the changes.
     description: String,
 }
@@ -114,10 +113,14 @@ async fn main() -> Result<(), ()> {
         Ok(v) => v.trim() != "true",
         Err(e) => {
             error!("Git repository check output was not valid UTF-8: {}", e);
-            true // Treat as not a repo if output is invalid
+            true
         }
     } {
-        error!("It looks like you are not in a git repository.\nPlease run this command from the root of a git repository, or initialize one using `git init`.");
+        error!(
+            "It looks like you are not in a git repository.\n\
+             Please run this command from the root of a git repository, \
+             or initialize one using `git init`."
+        );
         std::process::exit(1);
     }
 
@@ -192,7 +195,6 @@ async fn main() -> Result<(), ()> {
             Spinners::SquareCorners,
             Spinners::Triangle,
         ];
-
         let spinner = vs.choose(&mut rand::thread_rng()).unwrap().clone();
         Some(Spinner::new(spinner, "Analyzing Codebase...".into()))
     } else {
@@ -202,7 +204,6 @@ async fn main() -> Result<(), ()> {
     let mut generator = SchemaGenerator::new(SchemaSettings::openapi3().with(|settings| {
         settings.inline_subschemas = true;
     }));
-
     let commit_schema = generator.subschema_for::<Commit>().into_object();
 
     let completion = client
@@ -221,16 +222,18 @@ async fn main() -> Result<(), ()> {
                     ChatCompletionRequestMessage {
                         role: Role::Assistant,
                         content: Some("".to_string()),
-                        function_call: Some(FunctionCall {
-                            arguments: "{}".to_string(),
-                            name: "get_diff".to_string(),
+                        tool_calls: Some(ToolCall {
+                            for tool in tool_calls {
+                                name: "get_diff".to_string(),
+                                arguments: "{}".to_string(),
+                            }
                         }),
                         ..Default::default()
                     },
                     ChatCompletionRequestMessage {
                         role: Role::Function,
-                        content: Some(output.to_string()),
                         name: Some("get_diff".to_string()),
+                        content: Some(output.to_string()),
                         ..Default::default()
                     },
                 ])
@@ -253,7 +256,9 @@ async fn main() -> Result<(), ()> {
                         parameters: serde_json::to_value(commit_schema).unwrap(),
                     },
                 ])
-                .function_call(ChatCompletionFunctionCall::Name("commit".into()))
+                .tool_calls(ChatCompletionMessageToolCall::Function {
+                    name: "commit".to_string(),
+                })
                 .model(&get_model_from_env())
                 .temperature(0.0)
                 .max_tokens(2000u16)
@@ -267,10 +272,9 @@ async fn main() -> Result<(), ()> {
         spinner.stop_with_message("Finished Analyzing!".into());
     }
 
-    // Using the new field to avoid deprecation warning:
     let commit_args = &completion.choices[0]
         .message
-        .function_call
+        .tool_calls
         .as_ref()
         .unwrap()
         .arguments;
@@ -286,7 +290,6 @@ async fn main() -> Result<(), ()> {
             "Proposed Commit:\n------------------------------\n{}\n------------------------------",
             commit_msg
         );
-
         if !cli.force {
             let answer = Question::new("Do you want to continue? (Y/n)")
                 .yes_no()
@@ -294,7 +297,6 @@ async fn main() -> Result<(), ()> {
                 .default(Answer::YES)
                 .ask()
                 .expect("Couldn't ask question.");
-
             if answer == Answer::NO {
                 error!("Commit aborted by user.");
                 std::process::exit(1);
@@ -311,20 +313,17 @@ async fn main() -> Result<(), ()> {
         .stdin(Stdio::piped())
         .spawn()
         .unwrap();
-
     let mut stdin = ps_commit.stdin.take().expect("Failed to open stdin");
     std::thread::spawn(move || {
         stdin
             .write_all(commit_msg.as_bytes())
             .expect("Failed to write to stdin");
     });
-
     let commit_output = ps_commit
         .wait_with_output()
-        .expect("There was an error when creating the commit.");
+        .expect("Error when creating the commit.");
 
     info!("{}", str::from_utf8(&commit_output.stdout).unwrap());
-
     Ok(())
 }
 
@@ -346,9 +345,9 @@ mod tests {
     #[test]
     fn cli_default_parsing_sets_flags_and_info_level() {
         let cli = Cli::parse_from(&["auto-commit"]);
-        assert!(!cli.dry_run, "dry_run should be false by default");
-        assert!(!cli.review, "review should be false by default");
-        assert!(!cli.force, "force should be false by default");
+        assert!(!cli.dry_run);
+        assert!(!cli.review);
+        assert!(!cli.force);
         assert_eq!(cli.verbose.log_level_filter(), LevelFilter::Info);
     }
 
@@ -356,9 +355,9 @@ mod tests {
     fn cli_parsing_all_flags_and_verbose_levels() {
         let args = &["auto-commit", "--dry-run", "--review", "--force", "-vv"];
         let cli = Cli::parse_from(args);
-        assert!(cli.dry_run, "dry_run should be true when --dry-run is passed");
-        assert!(cli.review, "review should be true when --review is passed");
-        assert!(cli.force, "force should be true when --force is passed");
+        assert!(cli.dry_run);
+        assert!(cli.review);
+        assert!(cli.force);
         assert_eq!(cli.verbose.log_level_filter(), LevelFilter::Debug);
     }
 
@@ -374,7 +373,7 @@ mod tests {
     fn get_model_from_env_returns_non_empty_default_when_unset() {
         std::env::remove_var("AUTO_COMMIT_MODEL");
         let model = get_model_from_env();
-        assert!(!model.is_empty(), "Default model should not be empty");
+        assert!(!model.is_empty());
     }
 
     #[test]
