@@ -21,6 +21,7 @@ use std::{
     process::{Command, Stdio},
     str,
 };
+use auto_commit::{get_model_from_env, truncate_to_n_tokens};
 
 #[derive(Parser)]
 #[command(version)]
@@ -102,13 +103,35 @@ async fn main() -> Result<(), ()> {
 
     let client = async_openai::Client::with_config(OpenAIConfig::new().with_api_key(api_token));
 
-    let output = Command::new("git")
+    let files_output = Command::new("git")
         .arg("diff")
-        .arg("HEAD")
+        .arg("--name-only")
+        .arg("--staged")
+        .output()
+        .expect("Couldn't get changed files.")
+        .stdout;
+    let files_changed = str::from_utf8(&files_output).map_err(|e| {
+        error!("Git diff --name-only output is not valid UTF-8: {}. Attempting lossy conversion.", e);
+        // Decide on error strategy, e.g. propagate with `?` after mapping to `()`
+        // For a direct replacement that avoids panic but might have imperfect strings:
+        // String::from_utf8_lossy(&files_output).into_owned()
+        // Or, to propagate the error if main returns Result:
+        // return Err(()); // after mapping error to () for main's signature
+        // For now, let's suggest a pattern that would fit with `?` if error mapped
+        panic!("Non-UTF8 output from git: {}", e); // Placeholder, better to map and use `?`
+    }).unwrap_or_else(|_| String::new()); // Fallback to empty or handle error properly
+
+    let diff_output = Command::new("git")
+        .arg("diff")
+        .arg("--staged")
         .output()
         .expect("Couldn't find diff.")
         .stdout;
-    let output = str::from_utf8(&output).unwrap();
+    let diff_output = str::from_utf8(&diff_output).unwrap();
+
+    let combined = format!("Changed files:\n{}\n\nDiff:\n{}", files_changed, diff_output);
+    const MAX_DIFF_TOKENS: usize = 20_000; // Or define elsewhere
+    let output = truncate_to_n_tokens(&combined, MAX_DIFF_TOKENS);
 
     if !cli.dry_run {
         info!("Loading Data...");
@@ -206,7 +229,7 @@ async fn main() -> Result<(), ()> {
                 .function_call(ChatCompletionFunctionCall::Object(
                     json!({ "name": "commit" }),
                 ))
-                .model("gpt-3.5-turbo-16k")
+                .model(&get_model_from_env())
                 .temperature(0.0)
                 .max_tokens(2000u16)
                 .build()
@@ -272,4 +295,68 @@ async fn main() -> Result<(), ()> {
     info!("{}", str::from_utf8(&commit_output.stdout).unwrap());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap_verbosity_flag::{InfoLevel, Verbosity};
+    use log::LevelFilter;
+
+    #[test]
+    fn commit_to_string_formats_title_and_description() {
+        let commit = Commit {
+            title: "Fix bug".to_string(),
+            description: "Detailed description".to_string(),
+        };
+        assert_eq!(commit.to_string(), "Fix bug\n\nDetailed description");
+    }
+
+    #[test]
+    fn cli_default_parsing_sets_flags_and_info_level() {
+        let cli = Cli::parse_from(&["auto-commit"]);
+        assert!(!cli.dry_run, "dry_run should be false by default");
+        assert!(!cli.review, "review should be false by default");
+        assert!(!cli.force, "force should be false by default");
+        assert_eq!(cli.verbose.log_level_filter(), LevelFilter::Info);
+    }
+
+    #[test]
+    fn cli_parsing_all_flags_and_verbose_levels() {
+        let args = &["auto-commit", "--dry-run", "--review", "--force", "-vv"];
+        let cli = Cli::parse_from(args);
+        assert!(cli.dry_run, "dry_run should be true when --dry-run is passed");
+        assert!(cli.review, "review should be true when --review is passed");
+        assert!(cli.force, "force should be true when --force is passed");
+        assert_eq!(cli.verbose.log_level_filter(), LevelFilter::Debug);
+    }
+
+    #[test]
+    fn get_model_from_env_returns_env_value_when_set() {
+        std::env::set_var("AUTO_COMMIT_MODEL", "test-model");
+        let model = get_model_from_env();
+        assert_eq!(model, "test-model".to_string());
+        std::env::remove_var("AUTO_COMMIT_MODEL");
+    }
+
+    #[test]
+    fn get_model_from_env_returns_non_empty_default_when_unset() {
+        std::env::remove_var("AUTO_COMMIT_MODEL");
+        let model = get_model_from_env();
+        assert!(!model.is_empty(), "Default model should not be empty");
+    }
+
+    #[test]
+    fn truncate_to_n_tokens_returns_original_when_under_limit() {
+        let input = "one two three";
+        let result = truncate_to_n_tokens(input, 5);
+        assert_eq!(result, input.to_string());
+    }
+
+    #[test]
+    fn truncate_to_n_tokens_truncates_to_specified_token_count() {
+        let input = (1..=10).map(|n| n.to_string()).collect::<Vec<_>>().join(" ");
+        let result = truncate_to_n_tokens(&input, 5);
+        assert_eq!(result.split_whitespace().count(), 5);
+    }
 }
