@@ -123,7 +123,7 @@ async fn main() -> Result<(), ()> {
 
     let diff_output = Command::new("git")
         .arg("diff")
-        .arg("HEAD")
+        .arg("--staged")
         .output()
         .expect("Couldn't find diff.")
         .stdout;
