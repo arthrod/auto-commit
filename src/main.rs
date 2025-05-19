@@ -1,8 +1,8 @@
 use async_openai::{
     config::OpenAIConfig,
     types::{
-        ChatCompletionMessageToolCall, ChatCompletionFunctions, ChatCompletionRequestMessage,
-        CreateChatCompletionRequestArgs, ToolCall, Role,
+        ChatCompletionFunctionCall, ChatCompletionFunctions, ChatCompletionRequestMessage,
+        CreateChatCompletionRequestArgs, FunctionCall, Role,
     },
 };
 use clap::Parser;
@@ -213,36 +213,29 @@ async fn main() -> Result<(), ()> {
                 .messages(vec![
                     ChatCompletionRequestMessage {
                         role: Role::System,
-                        content: Some(
-                            "You are an experienced developer who writes great commit messages."
-                                .to_string(),
-                        ),
+                        content: Some("You are an experienced developer who writes great commit messages.".to_string()),
                         ..Default::default()
                     },
                     ChatCompletionRequestMessage {
                         role: Role::Assistant,
                         content: Some("".to_string()),
-                        tool_calls: Some(ToolCall {
-                            for tool in tool_calls {
-                                name: "get_diff".to_string(),
-                                arguments: "{}".to_string(),
-                            }
+                        function_call: Some(FunctionCall {
+                            name: "get_diff".to_string(),
+                            arguments: "{}".to_string(),
                         }),
                         ..Default::default()
                     },
                     ChatCompletionRequestMessage {
                         role: Role::Function,
                         name: Some("get_diff".to_string()),
-                        content: Some(output.to_string()),
+                        content: Some(output.clone()),
                         ..Default::default()
                     },
                 ])
                 .functions(vec![
                     ChatCompletionFunctions {
                         name: "get_diff".to_string(),
-                        description: Some(
-                            "Returns the output of `git diff HEAD` as a string.".to_string(),
-                        ),
+                        description: Some("Returns the output of `git diff HEAD` as a string.".to_string()),
                         parameters: json!({
                             "type": "object",
                             "properties": {}
@@ -250,13 +243,11 @@ async fn main() -> Result<(), ()> {
                     },
                     ChatCompletionFunctions {
                         name: "commit".to_string(),
-                        description: Some(
-                            "Creates a commit with the given title and a description.".to_string(),
-                        ),
+                        description: Some("Creates a commit with the given title and a description.".to_string()),
                         parameters: serde_json::to_value(commit_schema).unwrap(),
                     },
                 ])
-                .tool_calls(ChatCompletionMessageToolCall::Function {
+                .function_call(ChatCompletionFunctionCall::Function {
                     name: "commit".to_string(),
                 })
                 .model(&get_model_from_env())
@@ -267,6 +258,15 @@ async fn main() -> Result<(), ()> {
         )
         .await
         .expect("Couldn't complete prompt.");
+        }
+
+    Ok(())
+}
+    if let Some(fn_call) = &completion.choices[0].message.function_call {
+        let commit_args = &fn_call.arguments;
+        let commit_msg = serde_json::from_str::<Commit>(commit_args)
+            .expect("Couldn't parse model response.")
+            .to_string();
 
     if let Some(spinner) = sp {
         spinner.stop_with_message("Finished Analyzing!".into());
