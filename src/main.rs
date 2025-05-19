@@ -21,6 +21,7 @@ use std::{
     process::{Command, Stdio},
     str,
 };
+use auto_commit::{get_model_from_env, truncate_to_n_tokens};
 
 #[derive(Parser)]
 #[command(version)]
@@ -63,6 +64,8 @@ impl ToString for Commit {
     }
 }
 
+const MAX_DIFF_TOKENS: usize = 20_000;
+
 #[tokio::main]
 async fn main() -> Result<(), ()> {
     let cli = Cli::parse();
@@ -79,10 +82,19 @@ async fn main() -> Result<(), ()> {
         .arg("diff")
         .arg("--staged")
         .output()
-        .expect("Couldn't find diff.")
+        .map_err(|e| {
+            error!("Failed to get staged diff: {}", e);
+            ()
+        })?
         .stdout;
 
-    let git_staged_cmd = str::from_utf8(&git_staged_cmd).unwrap();
+    let git_staged_cmd = match str::from_utf8(&git_staged_cmd) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Staged diff output was not valid UTF-8: {}", e);
+            ""
+        }
+    };
 
     if git_staged_cmd.is_empty() {
         error!("There are no staged files to commit.\nTry running `git add` to stage some files.");
@@ -92,23 +104,56 @@ async fn main() -> Result<(), ()> {
         .arg("rev-parse")
         .arg("--is-inside-work-tree")
         .output()
-        .expect("Failed to check if this is a git repository.")
+        .map_err(|e| {
+            error!("Failed to check if this is a git repository: {}", e);
+            ()
+        })?
         .stdout;
 
-    if str::from_utf8(&is_repo).unwrap().trim() != "true" {
+    if str::from_utf8(&is_repo).unwrap_or("").trim() != "true" {
         error!("It looks like you are not in a git repository.\nPlease run this command from the root of a git repository, or initialize one using `git init`.");
         std::process::exit(1);
     }
 
     let client = async_openai::Client::with_config(OpenAIConfig::new().with_api_key(api_token));
 
-    let output = Command::new("git")
+    let files_output = Command::new("git")
         .arg("diff")
-        .arg("HEAD")
+        .arg("--name-only")
+        .arg("--staged")
         .output()
-        .expect("Couldn't find diff.")
+        .map_err(|e| {
+            error!("Couldn't get changed files: {}", e);
+            ()
+        })?
         .stdout;
-    let output = str::from_utf8(&output).unwrap();
+    let files_changed = match str::from_utf8(&files_output) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Changed files output was not valid UTF-8: {}", e);
+            ""
+        }
+    };
+
+    let diff_output = Command::new("git")
+        .arg("diff")
+        .arg("--staged")
+        .output()
+        .map_err(|e| {
+            error!("Couldn't find diff: {}", e);
+            ()
+        })?
+        .stdout;
+    let diff_output = match str::from_utf8(&diff_output) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Diff output was not valid UTF-8: {}", e);
+            ""
+        }
+    };
+
+    let combined = format!("Changed files:\n{}\n\nDiff:\n{}", files_changed, diff_output);
+    let output = truncate_to_n_tokens(&combined, MAX_DIFF_TOKENS);
 
     if !cli.dry_run {
         info!("Loading Data...");
@@ -206,7 +251,7 @@ async fn main() -> Result<(), ()> {
                 .function_call(ChatCompletionFunctionCall::Object(
                     json!({ "name": "commit" }),
                 ))
-                .model("gpt-3.5-turbo-16k")
+                .model(&get_model_from_env())
                 .temperature(0.0)
                 .max_tokens(2000u16)
                 .build()

@@ -28,6 +28,12 @@ You may need to close and reopen your terminal after installation. Alternatively
 export OPENAI_API_KEY='sk-XXXXXXXX'
 ```
 
+`auto-commit` uses the `AUTO_COMMIT_MODEL` environment variable to choose which OpenAI model to use when generating commit messages. If this variable is not set, the tool defaults to `gpt-4.1-nano`.
+
+```bash
+export AUTO_COMMIT_MODEL='gpt-4.1-nano'
+```
+
 Once you have configured your environment, stage some changes by running, for example, `git add .`, and then run `auto-commit`.
 
 Of course, `auto-commit` also includes some options, for editing the message before commiting, or just printing the message to the terminal.
