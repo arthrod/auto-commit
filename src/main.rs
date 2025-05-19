@@ -194,7 +194,6 @@ async fn main() -> Result<(), ()> {
         ];
 
         let spinner = vs.choose(&mut rand::thread_rng()).unwrap().clone();
-
         Some(Spinner::new(spinner, "Analyzing Codebase...".into()))
     } else {
         None
@@ -241,22 +240,20 @@ async fn main() -> Result<(), ()> {
                         description: Some(
                             "Returns the output of `git diff HEAD` as a string.".to_string(),
                         ),
-                        parameters: Some(json!({
+                        parameters: json!({
                             "type": "object",
                             "properties": {}
-                        })),
+                        }),
                     },
                     ChatCompletionFunctions {
                         name: "commit".to_string(),
                         description: Some(
                             "Creates a commit with the given title and a description.".to_string(),
                         ),
-                        parameters: Some(serde_json::to_value(commit_schema).unwrap()),
+                        parameters: serde_json::to_value(commit_schema).unwrap(),
                     },
                 ])
-                .function_call(ChatCompletionFunctionCall::Object(
-                    json!({ "name": "commit" }),
-                ))
+                .function_call(ChatCompletionFunctionCall::Name("commit".into()))
                 .model(&get_model_from_env())
                 .temperature(0.0)
                 .max_tokens(2000u16)
@@ -266,12 +263,18 @@ async fn main() -> Result<(), ()> {
         .await
         .expect("Couldn't complete prompt.");
 
-    if sp.is_some() {
-        sp.unwrap().stop_with_message("Finished Analyzing!".into());
+    if let Some(spinner) = sp {
+        spinner.stop_with_message("Finished Analyzing!".into());
     }
 
-    let commit_data = &completion.choices[0].message.function_call;
-    let commit_msg = serde_json::from_str::<Commit>(&commit_data.as_ref().unwrap().arguments)
+    // Using the new field to avoid deprecation warning:
+    let commit_args = &completion.choices[0]
+        .message
+        .function_call_object
+        .as_ref()
+        .unwrap()
+        .arguments;
+    let commit_msg = serde_json::from_str::<Commit>(commit_args)
         .expect("Couldn't parse model response.")
         .to_string();
 
