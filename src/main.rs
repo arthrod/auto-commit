@@ -110,7 +110,16 @@ async fn main() -> Result<(), ()> {
         .output()
         .expect("Couldn't get changed files.")
         .stdout;
-    let files_changed = str::from_utf8(&files_output).unwrap();
+    let files_changed = str::from_utf8(&files_output).map_err(|e| {
+        error!("Git diff --name-only output is not valid UTF-8: {}. Attempting lossy conversion.", e);
+        // Decide on error strategy, e.g. propagate with `?` after mapping to `()`
+        // For a direct replacement that avoids panic but might have imperfect strings:
+        // String::from_utf8_lossy(&files_output).into_owned()
+        // Or, to propagate the error if main returns Result:
+        // return Err(()); // after mapping error to () for main's signature
+        // For now, let's suggest a pattern that would fit with `?` if error mapped
+        panic!("Non-UTF8 output from git: {}", e); // Placeholder, better to map and use `?`
+    }).unwrap_or_else(|_| String::new()); // Fallback to empty or handle error properly
 
     let diff_output = Command::new("git")
         .arg("diff")
