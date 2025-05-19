@@ -2,8 +2,11 @@ pub fn truncate_to_n_tokens(text: &str, limit: usize) -> String {
     text.split_whitespace().take(limit).collect::<Vec<_>>().join(" ")
 }
 
+pub const DEFAULT_MODEL: &str = "gpt-4.1-nano";
+
 pub fn get_model_from_env() -> String {
-    std::env::var("AUTO_COMMIT_MODEL").unwrap_or_else(|_| "gpt-4.1-nano".to_string())
+    std::env::var("AUTO_COMMIT_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string())
+
 }
 
 #[cfg(test)]
@@ -19,7 +22,7 @@ mod tests {
     #[test]
     fn test_get_model_from_env_default() {
         std::env::remove_var("AUTO_COMMIT_MODEL");
-        assert_eq!(get_model_from_env(), "gpt-4.1-nano");
+        assert_eq!(get_model_from_env(), DEFAULT_MODEL);
     }
 
     #[test]
@@ -82,3 +85,4 @@ mod tests {
         std::env::remove_var("AUTO_COMMIT_MODEL");
     }
 }
+

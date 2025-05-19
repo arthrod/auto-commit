@@ -64,6 +64,8 @@ impl ToString for Commit {
     }
 }
 
+const MAX_DIFF_TOKENS: usize = 20_000;
+
 #[tokio::main]
 async fn main() -> Result<(), ()> {
     let cli = Cli::parse();
@@ -80,10 +82,19 @@ async fn main() -> Result<(), ()> {
         .arg("diff")
         .arg("--staged")
         .output()
-        .expect("Couldn't find diff.")
+        .map_err(|e| {
+            error!("Failed to get staged diff: {}", e);
+            ()
+        })?
         .stdout;
 
-    let git_staged_cmd = str::from_utf8(&git_staged_cmd).unwrap();
+    let git_staged_cmd = match str::from_utf8(&git_staged_cmd) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Staged diff output was not valid UTF-8: {}", e);
+            ""
+        }
+    };
 
     if git_staged_cmd.is_empty() {
         error!("There are no staged files to commit.\nTry running `git add` to stage some files.");
@@ -93,10 +104,22 @@ async fn main() -> Result<(), ()> {
         .arg("rev-parse")
         .arg("--is-inside-work-tree")
         .output()
-        .expect("Failed to check if this is a git repository.")
+        .map_err(|e| {
+            error!("Failed to check if this is a git repository: {}", e);
+            ()
+        })?
         .stdout;
 
-    if str::from_utf8(&is_repo).unwrap().trim() != "true" {
+    if match str::from_utf8(&is_repo) {
+        Ok(v) => v.trim() != "true",
+        Err(e) => {
+            error!("Git repository check output was not valid UTF-8: {}", e);
+            true // Treat as not a repo if output is invalid
+        }
+    } {
+        error!("It looks like you are not in a git repository.\nPlease run this command from the root of a git repository, or initialize one using `git init`.");
+        std::process::exit(1);
+    }
         error!("It looks like you are not in a git repository.\nPlease run this command from the root of a git repository, or initialize one using `git init`.");
         std::process::exit(1);
     }
@@ -108,29 +131,37 @@ async fn main() -> Result<(), ()> {
         .arg("--name-only")
         .arg("--staged")
         .output()
-        .expect("Couldn't get changed files.")
+        .map_err(|e| {
+            error!("Couldn't get changed files: {}", e);
+            ()
+        })?
         .stdout;
-    let files_changed = str::from_utf8(&files_output).map_err(|e| {
-        error!("Git diff --name-only output is not valid UTF-8: {}. Attempting lossy conversion.", e);
-        // Decide on error strategy, e.g. propagate with `?` after mapping to `()`
-        // For a direct replacement that avoids panic but might have imperfect strings:
-        // String::from_utf8_lossy(&files_output).into_owned()
-        // Or, to propagate the error if main returns Result:
-        // return Err(()); // after mapping error to () for main's signature
-        // For now, let's suggest a pattern that would fit with `?` if error mapped
-        panic!("Non-UTF8 output from git: {}", e); // Placeholder, better to map and use `?`
-    }).unwrap_or_else(|_| String::new()); // Fallback to empty or handle error properly
+    let files_changed = match str::from_utf8(&files_output) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Changed files output was not valid UTF-8: {}", e);
+            ""
+        }
+    };
 
     let diff_output = Command::new("git")
         .arg("diff")
         .arg("--staged")
         .output()
-        .expect("Couldn't find diff.")
+        .map_err(|e| {
+            error!("Couldn't find diff: {}", e);
+            ()
+        })?
         .stdout;
-    let diff_output = str::from_utf8(&diff_output).unwrap();
+    let diff_output = match str::from_utf8(&diff_output) {
+        Ok(v) => v,
+        Err(e) => {
+            error!("Diff output was not valid UTF-8: {}", e);
+            ""
+        }
+    };
 
     let combined = format!("Changed files:\n{}\n\nDiff:\n{}", files_changed, diff_output);
-    const MAX_DIFF_TOKENS: usize = 20_000; // Or define elsewhere
     let output = truncate_to_n_tokens(&combined, MAX_DIFF_TOKENS);
 
     if !cli.dry_run {
@@ -186,7 +217,7 @@ async fn main() -> Result<(), ()> {
                     ChatCompletionRequestMessage {
                         role: Role::System,
                         content: Some(
-                            "You are an experienced programmer who writes great commit messages."
+                            "You are an experienced developer who writes great commit messages."
                                 .to_string(),
                         ),
                         ..Default::default()
