@@ -21,6 +21,7 @@ use std::{
     process::{Command, Stdio},
     str,
 };
+use auto_commit::{get_model_from_env, truncate_to_n_tokens};
 
 #[derive(Parser)]
 #[command(version)]
@@ -102,13 +103,25 @@ async fn main() -> Result<(), ()> {
 
     let client = async_openai::Client::with_config(OpenAIConfig::new().with_api_key(api_token));
 
-    let output = Command::new("git")
+    let files_output = Command::new("git")
+        .arg("diff")
+        .arg("--name-only")
+        .arg("HEAD")
+        .output()
+        .expect("Couldn't get changed files.")
+        .stdout;
+    let files_changed = str::from_utf8(&files_output).unwrap();
+
+    let diff_output = Command::new("git")
         .arg("diff")
         .arg("HEAD")
         .output()
         .expect("Couldn't find diff.")
         .stdout;
-    let output = str::from_utf8(&output).unwrap();
+    let diff_output = str::from_utf8(&diff_output).unwrap();
+
+    let combined = format!("Changed files:\n{}\n\nDiff:\n{}", files_changed, diff_output);
+    let output = truncate_to_n_tokens(&combined, 20_000);
 
     if !cli.dry_run {
         info!("Loading Data...");
@@ -206,7 +219,7 @@ async fn main() -> Result<(), ()> {
                 .function_call(ChatCompletionFunctionCall::Object(
                     json!({ "name": "commit" }),
                 ))
-                .model("gpt-3.5-turbo-16k")
+                .model(&get_model_from_env())
                 .temperature(0.0)
                 .max_tokens(2000u16)
                 .build()
