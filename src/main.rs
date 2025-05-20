@@ -195,7 +195,7 @@ parameters: Some(serde_json::to_value(commit_schema).expect("Failed to serialize
             .tools(tools)
             .tool_choice(ChatCompletionToolChoiceOption::Named(
                 ChatCompletionNamedToolChoice {
-                    r#type: ChatCompletionToolType::Function,
+r#type: ChatCompletionToolType::Function,
                     function: FunctionName { name: "commit".to_string() },
                 }
             ))
