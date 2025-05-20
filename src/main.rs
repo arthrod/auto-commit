@@ -249,8 +249,7 @@ async fn main() -> Result<(), ()> {
     if !cli.force {
         if Question::new("Commit? (Y/n)")
             .yes_no()
-                         .until_acceptable()
-            .default(Answer
+            .until_acceptable()
             .default(Answer::YES)
             .ask()
             .unwrap()
