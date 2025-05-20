@@ -5,7 +5,9 @@ use async_openai::{
         ChatCompletionRequestAssistantMessageArgs,   // assistant message builder
         ChatCompletionRequestToolMessageArgs,        // tool response builder
         ChatCompletionMessageToolCall,               // tool-call struct
-        ChatCompletionFunctionsArgs,                 // function (tool) declaration
+        FunctionObject,                              // function definition for tool
+        ChatCompletionTool,                          // tool struct
+        ChatCompletionToolArgs,                      // tool builder
         CreateChatCompletionRequestArgs,             // request builder
         FunctionCall, FunctionName,                  // function-call types
         ChatCompletionToolType,                      // tool types
@@ -121,7 +123,7 @@ async fn main() -> Result<(), ()> {
             // … add others …
         ];
         Some(Spinner::new(
-            *choices.choose(&mut rand::thread_rng()).unwrap(),
+            *choices[..].choose(&mut rand::thread_rng()).unwrap(),
             "Analyzing code…".into(),
         ))
     } else {
@@ -164,17 +166,24 @@ async fn main() -> Result<(), ()> {
             .into(),
     ];
 
-    // Declare tools/functions
-    let functions = vec![
-        ChatCompletionFunctionsArgs::default()
-            .name("get_diff".to_string())
-            .description("Returns the output of `git diff HEAD` as a string.".to_string())
-            .parameters(json!({ "type": "object", "properties": {} }))
-            .build().unwrap(),
-        ChatCompletionFunctionsArgs::default()
-            .name("commit".to_string())
-            .description("Creates a commit with the given title and a description.".to_string())
-            .parameters(serde_json::to_value(commit_schema).unwrap())
+    // Declare tools
+    let tools = vec![
+        ChatCompletionToolArgs::default()
+            .r#type(ChatCompletionToolType::Function)
+            .function(FunctionObject {
+                name: "get_diff".to_string(),
+                description: Some("Returns the output of `git diff HEAD` as a string.".to_string()),
+                parameters: Some(json!({ "type": "object", "properties": {} })),
+                strict: None,
+            })
+.build().expect("Failed to build 'get_diff' tool")
+        ChatCompletionToolArgs::default()
+            .r#type(ChatCompletionToolType::Function)
+            .function(FunctionObject {
+                name: "commit".to_string(),
+                description: Some("Creates a commit with the given title and a description.".to_string()),
+parameters: Some(serde_json::to_value(commit_schema).expect("Failed to serialize commit_schema for 'commit' tool"))
+            })
             .build().unwrap(),
     ];
 
@@ -183,10 +192,10 @@ async fn main() -> Result<(), ()> {
         CreateChatCompletionRequestArgs::default()
             .model(&get_model_from_env())
             .messages(messages)
-            .functions(functions)
+            .tools(tools)
             .tool_choice(ChatCompletionToolChoiceOption::Named(
                 ChatCompletionNamedToolChoice {
-                    r#type: Some(ChatCompletionToolType::Function),
+r#type: ChatCompletionToolType::Function,
                     function: FunctionName { name: "commit".to_string() },
                 }
             ))
