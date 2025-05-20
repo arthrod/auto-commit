@@ -136,7 +136,7 @@ async fn main() -> Result<(), ()> {
             // … add others …
         ];
         Some(Spinner::new(
-            *choices.choose(&mut rand::thread_rng()).unwrap(),
+            *choices[..].choose(&mut rand::rng()).unwrap(),
             "Analyzing code…".into(),
         ))
     } else {
@@ -250,98 +250,4 @@ async fn main() -> Result<(), ()> {
         if Question::new("Commit? (Y/n)")
             .yes_no()
             .until_acceptable()
-            .default(Answer::YES)
-            .ask()
-            .unwrap()
-            == Answer::NO
-        {
-            error!("Aborted.");
-            std::process::exit(1);
-        }
-    }
-
-    // Perform the git commit
-    let mut proc_commit = Command::new("git")
-        .arg("commit")
-        .args(if cli.review { vec!["-e"] } else { vec![] })
-        .arg("-F")
-        .arg("-")
-        .stdin(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = proc_commit.stdin.take().unwrap();
-    std::thread::spawn(move || {
-        stdin.write_all(commit_msg.as_bytes()).unwrap();
-    });
-    let out = proc_commit.wait_with_output().unwrap();
-    info!("{}", str::from_utf8(&out.stdout).unwrap());
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap_verbosity_flag::{InfoLevel, Verbosity};
-    use log::LevelFilter;
-
-    #[test]
-    fn commit_to_string_formats_title_and_description() {
-        let commit = Commit {
-            title: "Fix bug".to_string(),
-            description: "Detailed description".to_string(),
-        };
-        assert_eq!(commit.to_string(), "Fix bug\n\nDetailed description");
-    }
-
-    #[test]
-    fn cli_default_parsing_sets_flags_and_info_level() {
-        let cli = Cli::parse_from(&["auto-commit"]);
-        assert!(!cli.dry_run);
-        assert!(!cli.review);
-        assert!(!cli.force);
-        assert_eq!(cli.verbose.log_level_filter(), LevelFilter::Info);
-    }
-
-    #[test]
-    fn cli_parsing_all_flags_and_verbose_levels() {
-        let args = &["auto-commit", "--dry-run", "--review", "--force", "-vv"];
-        let cli = Cli::parse_from(args);
-        assert!(cli.dry_run);
-        assert!(cli.review);
-        assert!(cli.force);
-        assert_eq!(cli.verbose.log_level_filter(), LevelFilter::Debug);
-    }
-
-    #[test]
-    fn get_model_from_env_returns_env_value_when_set() {
-        std::env::set_var("AUTO_COMMIT_MODEL", "test-model");
-        let model = get_model_from_env();
-        assert_eq!(model, "test-model".to_string());
-        std::env::remove_var("AUTO_COMMIT_MODEL");
-    }
-
-    #[test]
-    fn get_model_from_env_returns_non_empty_default_when_unset() {
-        std::env::remove_var("AUTO_COMMIT_MODEL");
-        let model = get_model_from_env();
-        assert!(!model.is_empty());
-    }
-
-    #[test]
-    fn truncate_to_n_tokens_returns_original_when_under_limit() {
-        let input = "one two three";
-        let result = truncate_to_n_tokens(input, 5);
-        assert_eq!(result, input.to_string());
-    }
-
-    #[test]
-    fn truncate_to_n_tokens_truncates_to_specified_token_count() {
-        let input = (1..=10)
-            .map(|n| n.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let result = truncate_to_n_tokens(&input, 5);
-        assert_eq!(result.split_whitespace().count(), 5);
-    }
-}
+            .default(Answer
