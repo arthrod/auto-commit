@@ -176,7 +176,7 @@ async fn main() -> Result<(), ()> {
                 parameters: Some(json!({ "type": "object", "properties": {} })),
                 strict: None,
             })
-            .build().unwrap(),
+.build().expect("Failed to build 'get_diff' tool")
         ChatCompletionToolArgs::default()
             .r#type(ChatCompletionToolType::Function)
             .function(FunctionObject {
