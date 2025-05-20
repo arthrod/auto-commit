@@ -182,8 +182,7 @@ async fn main() -> Result<(), ()> {
             .function(FunctionObject {
                 name: "commit".to_string(),
                 description: Some("Creates a commit with the given title and a description.".to_string()),
-                parameters: Some(serde_json::to_value(commit_schema).unwrap()),
-                strict: None,
+parameters: Some(serde_json::to_value(commit_schema).expect("Failed to serialize commit_schema for 'commit' tool"))
             })
             .build().unwrap(),
     ];
