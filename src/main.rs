@@ -123,7 +123,7 @@ async fn main() -> Result<(), ()> {
             // … add others …
         ];
         Some(Spinner::new(
-            *choices[..].choose(&mut rand::thread_rng()).unwrap(),
+            *choices[..].choose(&mut rand::rng()).unwrap(),
             "Analyzing code…".into(),
         ))
     } else {
